@@ -58,7 +58,9 @@ func (ctrl *OperatorVIPConfigController) Outputs() []controller.Output {
 //
 //nolint:gocyclo,cyclop
 func (ctrl *OperatorVIPConfigController) Run(ctx context.Context, r controller.Runtime, logger *zap.Logger) error {
+	logger.Warn("##################HCLOUD-DEBUG################## OperatorVIPConfigController Run")
 	for {
+		logger.Warn("##################HCLOUD-DEBUG################## OperatorVIPConfigController Run loop")
 		select {
 		case <-ctx.Done():
 			return nil
@@ -98,6 +100,7 @@ func (ctrl *OperatorVIPConfigController) Run(ctx context.Context, r controller.R
 			specErrors *multierror.Error
 		)
 
+		logger.Warn("##################HCLOUD-DEBUG################## devices", zap.Any("devices", devices))
 		// operators from the config
 		if len(devices) > 0 {
 			for _, device := range devices {
@@ -109,10 +112,14 @@ func (ctrl *OperatorVIPConfigController) Run(ctx context.Context, r controller.R
 					continue
 				}
 
+				logger.Warn("##################HCLOUD-DEBUG################## device", zap.String("device.Interface", device.Interface()), zap.Bool("device.VIPConfig != null", device.VIPConfig() != nil))
 				if device.VIPConfig() != nil {
+					logger.Warn("##################HCLOUD-DEBUG################## device.VIPConfig", zap.String("device.VIPConfig.IP", device.VIPConfig().IP()))
 					if spec, specErr := handleVIP(ctx, device.VIPConfig(), device.Interface(), logger); specErr != nil {
+						logger.Warn("##################HCLOUD-DEBUG################## handleVIP error", zap.Error(specErr))
 						specErrors = multierror.Append(specErrors, specErr)
 					} else {
+						logger.Warn("##################HCLOUD-DEBUG################## handleVIP success", zap.Any("spec", spec))
 						specs = append(specs, spec)
 					}
 				}
@@ -215,6 +222,7 @@ func handleVIP(ctx context.Context, vlanConfig talosconfig.VIPConfig, deviceName
 		ConfigLayer: network.ConfigMachineConfiguration,
 	}
 
+	logger.Warn("##################HCLOUD-DEBUG################## vlanConfig", zap.String("vlanConfig.IP", vlanConfig.IP()), zap.Bool("vlanConfig.HCloud != null", vlanConfig.HCloud() != nil), zap.Bool("vlanConfig.EquinixMetal != null", vlanConfig.EquinixMetal() != nil))
 	switch {
 	// Equinix Metal VIP
 	case vlanConfig.EquinixMetal() != nil:
@@ -229,7 +237,9 @@ func handleVIP(ctx context.Context, vlanConfig talosconfig.VIPConfig, deviceName
 		spec.VIP.GratuitousARP = false
 		spec.VIP.HCloud.APIToken = vlanConfig.HCloud().APIToken()
 
-		if err = vip.GetNetworkAndDeviceIDs(ctx, &spec.VIP.HCloud, sharedIP); err != nil {
+		logger.Warn("##################HCLOUD-DEBUG################## VIP", zap.String("vip", sharedIP.String()))
+		if err = vip.GetNetworkAndDeviceIDs(ctx, &spec.VIP.HCloud, sharedIP, logger); err != nil {
+			logger.Warn("##################HCLOUD-DEBUG################## Found no network for VIP", zap.Error(err), zap.String("link", deviceName))
 			return network.OperatorSpecSpec{}, err
 		}
 	// Regular layer 2 VIP

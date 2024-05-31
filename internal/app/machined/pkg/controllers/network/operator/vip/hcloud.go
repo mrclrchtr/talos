@@ -45,13 +45,16 @@ func NewHCloudHandler(logger *zap.Logger, vip string, spec network.VIPHCloudSpec
 
 // Acquire implements Handler interface.
 func (handler *HCloudHandler) Acquire(ctx context.Context) error {
+	handler.logger.Warn("##################HCLOUD-DEBUG################## Acquire", zap.String("vip", handler.vip), zap.Int64("deviceID", handler.deviceID), zap.Int64("networkID", handler.networkID))
 	if handler.networkID > 0 {
+		handler.logger.Warn("##################HCLOUD-DEBUG################## networkID > 0", zap.String("vip", handler.vip))
 		var action *hcloud.Action
 
 		alias := hcloud.ServerChangeAliasIPsOpts{
 			Network:  &hcloud.Network{ID: handler.networkID},
 			AliasIPs: []net.IP{},
 		}
+		handler.logger.Warn("##################HCLOUD-DEBUG################## alias", zap.Any("alias", alias))
 
 		// trying to find the old active server
 		// and remove alias IP from it
@@ -60,7 +63,8 @@ func (handler *HCloudHandler) Acquire(ctx context.Context) error {
 			return fmt.Errorf("error getting server list: %w", err)
 		}
 
-		oldDeviceID := findServerByAlias(serverList, handler.networkID, handler.vip)
+		oldDeviceID := findServerByAlias(serverList, handler.networkID, handler.vip, handler.logger)
+		handler.logger.Warn("##################HCLOUD-DEBUG################## oldDeviceID", zap.Int64("oldDeviceID", oldDeviceID))
 		if oldDeviceID != 0 {
 			action, _, err = handler.client.Server.ChangeAliasIPs(ctx,
 				&hcloud.Server{ID: oldDeviceID},
@@ -93,12 +97,14 @@ func (handler *HCloudHandler) Acquire(ctx context.Context) error {
 	}
 
 	floatips, err := handler.client.FloatingIP.All(ctx)
+	handler.logger.Warn("##################HCLOUD-DEBUG################## floatips", zap.Any("floatips", floatips))
 	if err != nil {
 		return fmt.Errorf("error getting floatingIPs list: %w", err)
 	}
 
 	for _, floatip := range floatips {
 		if floatip.IP.String() == handler.vip {
+			handler.logger.Warn("##################HCLOUD-DEBUG################## floatip", zap.Any("floatip", floatip))
 			action, _, err := handler.client.FloatingIP.Assign(ctx, floatip, &hcloud.Server{ID: handler.deviceID})
 			if err != nil {
 				return fmt.Errorf("error assigning %q on server %d: %w", handler.vip, handler.deviceID, err)
@@ -116,7 +122,9 @@ func (handler *HCloudHandler) Acquire(ctx context.Context) error {
 
 // Release implements Handler interface.
 func (handler *HCloudHandler) Release(ctx context.Context) error {
+	handler.logger.Warn("##################HCLOUD-DEBUG################## Release", zap.String("vip", handler.vip))
 	if handler.networkID > 0 {
+		handler.logger.Warn("##################HCLOUD-DEBUG################## networkID > 0", zap.String("vip", handler.vip))
 		alias := hcloud.ServerChangeAliasIPsOpts{
 			Network:  &hcloud.Network{ID: handler.networkID},
 			AliasIPs: []net.IP{},
@@ -136,6 +144,7 @@ func (handler *HCloudHandler) Release(ctx context.Context) error {
 	}
 
 	if handler.floatingID > 0 {
+		handler.logger.Warn("##################HCLOUD-DEBUG################## floatingID > 0", zap.String("vip", handler.vip))
 		floatip, _, err := handler.client.FloatingIP.GetByID(ctx, handler.floatingID)
 		if err != nil {
 			return fmt.Errorf("error getting floatingIP info: %w", err)
@@ -155,7 +164,8 @@ func (handler *HCloudHandler) Release(ctx context.Context) error {
 const HCloudMetaDataEndpoint = "http://169.254.169.254/hetzner/v1/metadata/instance-id"
 
 // GetNetworkAndDeviceIDs fills in parts of the spec based on the API token and instance metadata.
-func GetNetworkAndDeviceIDs(ctx context.Context, spec *network.VIPHCloudSpec, vip netip.Addr) error {
+func GetNetworkAndDeviceIDs(ctx context.Context, spec *network.VIPHCloudSpec, vip netip.Addr, logger *zap.Logger) error {
+	logger.Warn("##################HCLOUD-DEBUG################## GetNetworkAndDeviceIDs", zap.String("vip", vip.String()))
 	metadataInstanceID, err := download.Download(ctx, HCloudMetaDataEndpoint)
 	if err != nil {
 		return fmt.Errorf("error downloading instance-id: %w", err)
@@ -175,15 +185,19 @@ func GetNetworkAndDeviceIDs(ctx context.Context, spec *network.VIPHCloudSpec, vi
 
 	spec.NetworkID = 0
 
+	logger.Warn("##################HCLOUD-DEBUG################## private networks", zap.String("names", fmt.Sprintf("%v", server.PrivateNet)))
 	for _, privnet := range server.PrivateNet {
 		network, _, err := client.Network.GetByID(ctx, privnet.Network.ID)
 		if err != nil {
+			logger.Warn("##################HCLOUD-DEBUG################## error getting network info", zap.Error(err))
 			return fmt.Errorf("error getting network info: %w", err)
 		}
-
+		logger.Warn("##################HCLOUD-DEBUG################## network", zap.String("network", network.Name), zap.String("ip-range", network.IPRange.String()), zap.String("vip", vip.String()))
+		logger.Warn("##################HCLOUD-DEBUG################## IPRange contains VIP", zap.Bool("contains", network.IPRange.Contains(vip.AsSlice())))
 		if network.IPRange.Contains(vip.AsSlice()) {
+			logger.Warn("##################HCLOUD-DEBUG################## network found", zap.String("network", network.Name), zap.String("ip-range", network.IPRange.String()), zap.String("vip", vip.String()))
 			spec.NetworkID = privnet.Network.ID
-
+			logger.Warn("##################HCLOUD-DEBUG################## spec.NetworkID", zap.Int64("spec.NetworkID", spec.NetworkID))
 			break
 		}
 	}
@@ -191,12 +205,18 @@ func GetNetworkAndDeviceIDs(ctx context.Context, spec *network.VIPHCloudSpec, vi
 	return nil
 }
 
-func findServerByAlias(serverList []*hcloud.Server, networkID int64, vip string) (deviceID int64) {
+func findServerByAlias(serverList []*hcloud.Server, networkID int64, vip string, logger *zap.Logger) (deviceID int64) {
+	logger.Warn("##################HCLOUD-DEBUG################## findServerByAlias", zap.Int64("networkID", networkID), zap.String("vip", vip))
 	for _, server := range serverList {
+		logger.Warn("##################HCLOUD-DEBUG################## server", zap.Any("server", server))
 		for _, network := range server.PrivateNet {
+			logger.Warn("##################HCLOUD-DEBUG################## network", zap.Any("network", network))
 			if network.Network.ID == networkID {
+				logger.Warn("##################HCLOUD-DEBUG################## network found", zap.Any("network", network))
 				for _, alias := range network.Aliases {
+					logger.Warn("##################HCLOUD-DEBUG################## alias", zap.Any("alias", alias))
 					if alias.String() == vip {
+						logger.Warn("##################HCLOUD-DEBUG################## alias == vip", zap.Any("alias", alias), zap.String("vip", vip))
 						return server.ID
 					}
 				}
@@ -204,5 +224,6 @@ func findServerByAlias(serverList []*hcloud.Server, networkID int64, vip string)
 		}
 	}
 
+	logger.Warn("##################HCLOUD-DEBUG################## deviceID not found")
 	return 0
 }
